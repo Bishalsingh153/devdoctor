@@ -1,0 +1,50 @@
+{
+  "name": "devdoctor",
+  "version": "0.1.0",
+  "description": "CLI for scanning, explaining, and fixing developer environment issues",
+  "type": "module",
+  "bin": {
+    "devdoctor": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsup",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "cli",
+    "developer-tools"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@inquirer/prompts": "^8.5.2",
+    "chalk": "^6.0.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^14.0.0",
+    "depcheck": "^1.4.7",
+    "diff": "^9.0.0",
+    "dotenv": "^17.4.2",
+    "fast-glob": "^3.3.3",
+    "openai": "^7.5.0",
+    "ora": "^9.4.1",
+    "simple-git": "^3.36.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "allowScripts": {
+    "esbuild@0.27.7": true,
+    "esbuild@0.28.2": true
+  }
+}
