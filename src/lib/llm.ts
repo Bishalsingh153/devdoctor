@@ -164,14 +164,61 @@ export async function explainIssue(issue: Issue): Promise<string> {
   }
 }
 
+/**
+ * Isolate the first complete JSON array in a model response.
+ *
+ * Groq / openai/gpt-oss-120b sometimes appends commentary or a second
+ * object after a complete JSON array despite the "ONLY a raw JSON array"
+ * instruction. Slicing from the first `[` to the last `]` would include
+ * that trailing junk and fail JSON.parse. Walk forward from the first
+ * `[` with a depth counter (ignoring brackets inside quoted strings) and
+ * take only the matching `]`.
+ */
 function extractJsonArray(raw: string): string {
   const stripped = stripJsonFences(raw);
   const start = stripped.indexOf("[");
-  const end = stripped.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) {
+  if (start === -1) {
     return stripped;
   }
-  return stripped.slice(start, end + 1);
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < stripped.length; i += 1) {
+    const ch = stripped[i];
+
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return stripped.slice(start, i + 1);
+      }
+    }
+  }
+
+  return stripped;
 }
 
 function stripJsonFences(raw: string): string {
