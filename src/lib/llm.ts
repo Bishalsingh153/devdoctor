@@ -198,10 +198,24 @@ function isProposedFix(value: unknown): value is ProposedFix {
   );
 }
 
+/**
+ * Max JSON payload for proposeFix. Completions are capped at 4000 tokens
+ * (~16k chars) and the model must echo full file content, so a 40k-char
+ * input still gets truncated. 15k leaves room for JSON wrapping.
+ */
+export const PROPOSE_FIX_MAX_CHARS = 15_000;
+
 export async function proposeFix(
   issue: Issue,
   fileContents: Record<string, string>,
 ): Promise<ProposeFixResult> {
+  const payloadChars = JSON.stringify({ issue, files: fileContents }).length;
+  if (payloadChars > PROPOSE_FIX_MAX_CHARS) {
+    throw new LlmRequestError(
+      `File too large to propose a single-file fix (${payloadChars.toLocaleString("en-US")} chars, limit ~${PROPOSE_FIX_MAX_CHARS.toLocaleString("en-US")}). This file needs a manual look or a smaller targeted fix.`,
+    );
+  }
+
   const client = createClient();
   let raw = "";
   let usage: LlmUsage | null = null;
