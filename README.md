@@ -21,6 +21,29 @@ npm install -g @bishalsingh/devdoctor
 devdoctor scan
 ```
 
+### Permission errors on Linux/macOS
+
+If `npm install -g @bishalsingh/devdoctor` fails with `EACCES: permission denied`, npm's default global install location isn't writable by your user. Two options:
+
+- Quick fix: run the install with `sudo`:
+
+  ```bash
+  sudo npm install -g @bishalsingh/devdoctor
+  ```
+
+- Recommended one-time fix: point npm's global installs at a directory your user owns, so this doesn't happen for any future global package:
+
+  ```bash
+  mkdir ~/.npm-global
+  npm config set prefix '~/.npm-global'
+  echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+  source ~/.bashrc
+  ```
+
+  (use `~/.zshrc` instead of `~/.bashrc` if you're on zsh)
+
+  Then retry `npm install -g @bishalsingh/devdoctor` without sudo.
+
 **Local development from source** (clone this repo)
 
 ```bash
