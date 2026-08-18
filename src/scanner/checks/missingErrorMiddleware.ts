@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Issue } from "../types.js";
-import { listSourceFiles } from "../sourceFiles.js";
+import { listSourceFiles, readTextFile } from "../sourceFiles.js";
 
 interface PackageJson {
   dependencies?: Record<string, string>;
@@ -36,10 +36,8 @@ export async function run(projectRoot: string): Promise<Issue[]> {
   const files = await listSourceFiles(projectRoot);
 
   for (const file of files) {
-    let content: string;
-    try {
-      content = await fs.readFile(file, "utf8");
-    } catch {
+    const content = await readTextFile(file);
+    if (content === null) {
       continue;
     }
     if (pattern.test(content)) {

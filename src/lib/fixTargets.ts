@@ -1,17 +1,32 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { Issue } from "../scanner/types.js";
-import { listSourceFiles, toRelative } from "../scanner/sourceFiles.js";
-
-const TODO_MARKER = "TO" + "DO";
-const TODO_PATTERN = new RegExp(`\\b${TODO_MARKER}\\b`, "g");
+import {
+  listSourceFiles,
+  readTextFile,
+  toRelative,
+} from "../scanner/sourceFiles.js";
+import {
+  CONSOLE_LOG_ISSUE_TITLE,
+  countConsoleLogs,
+  isConsoleLogSkippedFile,
+} from "../scanner/checks/consoleLogLeftIn.js";
+import { ENV_COMMITTED_TITLE } from "../scanner/checks/envFileCommitted.js";
+import {
+  GITIGNORE_GAPS_TITLE,
+  NO_GITIGNORE_TITLE,
+} from "../scanner/checks/gitignoreGaps.js";
+import {
+  OUTDATED_DEPS_COMBINED_TITLE,
+  OUTDATED_DEP_TITLE_PREFIX,
+} from "../scanner/checks/outdatedDependencies.js";
+import {
+  TODO_ISSUE_TITLE,
+  countTodoComments,
+  isTodoMetaFile,
+} from "../scanner/todoPattern.js";
 
 async function readIfExists(filePath: string): Promise<string | null> {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return null;
-  }
+  return readTextFile(filePath);
 }
 
 async function fileWithHighestTodoCount(
@@ -23,13 +38,44 @@ async function fileWithHighestTodoCount(
   let best: { relative: string; count: number } | null = null;
 
   for (const file of files) {
+    const relative = toRelative(projectRoot, file);
+    if (isTodoMetaFile(relative)) {
+      continue;
+    }
     const content = await readIfExists(file);
     if (content === null) {
       continue;
     }
-    const count = content.match(TODO_PATTERN)?.length ?? 0;
+    const count = countTodoComments(content);
     if (count > 0 && (best === null || count > best.count)) {
-      best = { relative: toRelative(projectRoot, file), count };
+      best = { relative, count };
+    }
+  }
+
+  return best?.relative ?? null;
+}
+
+async function fileWithHighestConsoleLogCount(
+  projectRoot: string,
+): Promise<string | null> {
+  const files = await listSourceFiles(projectRoot);
+  let best: { relative: string; count: number } | null = null;
+
+  for (const file of files) {
+    const relative = toRelative(projectRoot, file);
+    if (!relative.startsWith("src/") && relative !== "src") {
+      continue;
+    }
+    if (isConsoleLogSkippedFile(relative)) {
+      continue;
+    }
+    const content = await readIfExists(file);
+    if (content === null) {
+      continue;
+    }
+    const count = countConsoleLogs(content);
+    if (count > 0 && (best === null || count > best.count)) {
+      best = { relative, count };
     }
   }
 
@@ -83,13 +129,25 @@ export async function filesForIssue(
   if (
     issue.title === "No test script defined" ||
     issue.title === "Placeholder test script" ||
-    issue.title.startsWith("Unused dependency:")
+    issue.title.startsWith("Unused dependency:") ||
+    issue.title.startsWith(OUTDATED_DEP_TITLE_PREFIX) ||
+    issue.title === OUTDATED_DEPS_COMBINED_TITLE
   ) {
     relative = "package.json";
-  } else if (issue.title === `${TODO_MARKER} comments found`) {
+  } else if (issue.title === TODO_ISSUE_TITLE) {
     relative = await fileWithHighestTodoCount(projectRoot);
+  } else if (issue.title === CONSOLE_LOG_ISSUE_TITLE) {
+    relative = await fileWithHighestConsoleLogCount(projectRoot);
   } else if (issue.title === "Missing Express error-handling middleware") {
     relative = await mostRelevantExpressFile(projectRoot);
+  } else if (
+    issue.title === ENV_COMMITTED_TITLE ||
+    issue.title === GITIGNORE_GAPS_TITLE ||
+    issue.title === NO_GITIGNORE_TITLE
+  ) {
+    // Committed .env files are not sent to the model (secrets). Propose
+    // .gitignore changes only; untracking is `git rm --cached` by the user.
+    relative = ".gitignore";
   } else {
     relative = pathFromIssue(issue);
   }
@@ -102,9 +160,15 @@ export async function filesForIssue(
 
   const absolute = path.join(projectRoot, relative);
   const content = await readIfExists(absolute);
-  if (content === null) {
+  const allowMissing =
+    relative === ".gitignore" &&
+    (issue.title === ENV_COMMITTED_TITLE ||
+      issue.title === GITIGNORE_GAPS_TITLE ||
+      issue.title === NO_GITIGNORE_TITLE);
+
+  if (content === null && !allowMissing) {
     throw new Error(`Could not read ${relative} for issue ${issue.id}.`);
   }
 
-  return { [relative]: content };
+  return { [relative]: content ?? "" };
 }

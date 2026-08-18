@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ScanResult } from "./types.js";
+import { ScanCacheCorruptError } from "../lib/errors.js";
 
 const CACHE_DIR = ".devdoctor";
 const CACHE_FILE = "last-scan.json";
@@ -31,10 +32,22 @@ export async function loadLastScan(
 ): Promise<ScanResult | null> {
   try {
     const raw = await fs.readFile(cachePath(projectRoot), "utf8");
-    return JSON.parse(raw) as ScanResult;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !Array.isArray((parsed as ScanResult).critical) ||
+      !Array.isArray((parsed as ScanResult).warnings)
+    ) {
+      throw new ScanCacheCorruptError();
+    }
+    return parsed as ScanResult;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return null;
+    }
+    if (error instanceof SyntaxError) {
+      throw new ScanCacheCorruptError();
     }
     throw error;
   }

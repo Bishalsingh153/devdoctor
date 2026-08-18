@@ -11,4 +11,5 @@ export interface ScanResult {
   critical: Issue[];
   warnings: Issue[];
   healthyCount: number;
+  note?: string;
 }

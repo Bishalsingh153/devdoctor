@@ -1,0 +1,8 @@
+{
+  "name": "messy-project",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node src/app.ts"
+  }
+}

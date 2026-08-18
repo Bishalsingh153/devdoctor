@@ -1,0 +1,9 @@
+{
+  "name": "gitignore-gaps",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "build": "tsc"
+  }
+}

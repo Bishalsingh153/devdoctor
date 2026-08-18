@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import type { Severity } from "../scanner/types.js";
+import type { ScanResult, Severity } from "../scanner/types.js";
 
 export function colorBySeverity(severity: Severity, text: string): string {
   switch (severity) {
@@ -46,4 +46,31 @@ function wrapParagraph(paragraph: string, width: number): string {
   }
 
   return lines.join("\n");
+}
+
+function plural(count: number, singular: string, pluralForm?: string): string {
+  if (count === 1) {
+    return singular;
+  }
+  return pluralForm ?? `${singular}s`;
+}
+
+export function printScanHeader(result: ScanResult): void {
+  const { critical, warnings, healthyCount } = result;
+
+  console.log();
+  console.log(chalk.bold("DEVDOCTOR"));
+  console.log();
+  console.log(
+    `🔴 ${critical.length} critical ${plural(critical.length, "issue")}`,
+  );
+  console.log(`🟠 ${warnings.length} ${plural(warnings.length, "warning")}`);
+  console.log(
+    `🟢 ${healthyCount} healthy ${plural(healthyCount, "check")}`,
+  );
+  console.log();
+  if (result.note) {
+    console.log(result.note);
+    console.log();
+  }
 }

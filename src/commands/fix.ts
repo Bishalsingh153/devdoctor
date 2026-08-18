@@ -5,14 +5,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import ora from "ora";
 import { filesForIssue } from "../lib/fixTargets.js";
-import { colorBySeverity } from "../lib/format.js";
+import { colorBySeverity, printScanHeader } from "../lib/format.js";
 import {
   currentBranch,
   hasUncommittedChanges,
   isGitRepo,
 } from "../lib/git.js";
+import { ScanCacheCorruptError } from "../lib/errors.js";
 import { proposeFix, type ProposedFix } from "../lib/llm.js";
-import { loadLastScan } from "../scanner/cache.js";
+import { loadLastScan, saveLastScan } from "../scanner/cache.js";
+import { ensureGitignore } from "../scanner/gitignore.js";
+import { scan } from "../scanner/index.js";
 import type { Issue } from "../scanner/types.js";
 
 function fail(message: string): never {
@@ -90,15 +93,25 @@ function printUnifiedDiff(file: string, oldContent: string, newContent: string):
   }
 }
 
+function preserveTrailingNewline(original: string, next: string): string {
+  const trimmed = next.replace(/\s+$/, "");
+  if (original.length === 0 || original.endsWith("\n")) {
+    return `${trimmed}\n`;
+  }
+  return trimmed;
+}
+
 async function applyProposedFixes(
   projectRoot: string,
   originals: Record<string, string>,
   proposals: ProposedFix[],
-): Promise<void> {
+): Promise<number> {
   if (proposals.length === 0) {
     console.log("No file changes proposed.");
-    return;
+    return 0;
   }
+
+  let applied = 0;
 
   for (const proposal of proposals) {
     const absolute = resolveInProject(projectRoot, proposal.file);
@@ -107,11 +120,12 @@ async function applyProposedFixes(
       originals[relative] ??
       originals[proposal.file] ??
       (await fs.readFile(absolute, "utf8").catch(() => ""));
+    const newContent = preserveTrailingNewline(oldContent, proposal.newContent);
 
     console.log();
     console.log(chalk.bold(proposal.summary));
     console.log();
-    printUnifiedDiff(relative, oldContent, proposal.newContent);
+    printUnifiedDiff(relative, oldContent, newContent);
     console.log();
 
     const apply = await confirm({
@@ -125,12 +139,15 @@ async function applyProposedFixes(
     }
 
     await fs.mkdir(path.dirname(absolute), { recursive: true });
-    await fs.writeFile(absolute, proposal.newContent, "utf8");
+    await fs.writeFile(absolute, newContent, "utf8");
     console.log(`✅ Fixed: ${relative}`);
+    applied += 1;
   }
+
+  return applied;
 }
 
-async function fixIssue(projectRoot: string, issue: Issue): Promise<void> {
+async function fixIssue(projectRoot: string, issue: Issue): Promise<number> {
   console.log();
   console.log(colorBySeverity(issue.severity, `${issue.id}. ${issue.title}`));
   if (issue.detail) {
@@ -153,7 +170,22 @@ async function fixIssue(projectRoot: string, issue: Issue): Promise<void> {
     throw error;
   }
 
-  await applyProposedFixes(projectRoot, originals, proposals);
+  return applyProposedFixes(projectRoot, originals, proposals);
+}
+
+async function rescanAndPrint(projectRoot: string): Promise<void> {
+  const spinner = ora("Re-scanning project...").start();
+
+  try {
+    const result = await scan(projectRoot);
+    spinner.stop();
+    printScanHeader(result);
+    await saveLastScan(projectRoot, result);
+    await ensureGitignore(projectRoot);
+  } catch (error) {
+    spinner.fail("Re-scan failed");
+    throw error;
+  }
 }
 
 export async function runFix(args: {
@@ -172,7 +204,15 @@ export async function runFix(args: {
   try {
     await ensureGitSafety(projectRoot);
 
-    const result = await loadLastScan(projectRoot);
+    let result;
+    try {
+      result = await loadLastScan(projectRoot);
+    } catch (error) {
+      if (error instanceof ScanCacheCorruptError) {
+        fail(error.message);
+      }
+      throw error;
+    }
     if (!result) {
       fail("No scan cache found. Run `devdoctor scan` first.");
     }
@@ -184,9 +224,10 @@ export async function runFix(args: {
         console.log("No issues in the last scan.");
         return;
       }
+      let applied = 0;
       for (const issue of issues) {
         try {
-          await fixIssue(projectRoot, issue);
+          applied += await fixIssue(projectRoot, issue);
         } catch (error) {
           const message =
             error instanceof Error
@@ -194,6 +235,9 @@ export async function runFix(args: {
               : "Could not fix this issue.";
           console.error(message);
         }
+      }
+      if (applied > 0) {
+        await rescanAndPrint(projectRoot);
       }
       return;
     }
@@ -210,7 +254,10 @@ export async function runFix(args: {
       );
     }
 
-    await fixIssue(projectRoot, issue);
+    const applied = await fixIssue(projectRoot, issue);
+    if (applied > 0) {
+      await rescanAndPrint(projectRoot);
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes("User force closed")) {
       process.exit(0);

@@ -3,7 +3,7 @@ import type { Issue } from "../types.js";
 
 export async function run(projectRoot: string): Promise<Issue[]> {
   const unused = await depcheck(projectRoot, {
-    ignorePatterns: ["dist", "build", "node_modules"],
+    ignorePatterns: ["dist", "build", "node_modules", ".git"],
   });
 
   return unused.dependencies.map((name) => ({

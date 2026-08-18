@@ -1,18 +1,14 @@
 import chalk from "chalk";
 import Table from "cli-table3";
+import fs from "node:fs/promises";
+import path from "node:path";
 import ora from "ora";
-import { colorBySeverity } from "../lib/format.js";
+import { UserFacingError } from "../lib/errors.js";
+import { colorBySeverity, printScanHeader } from "../lib/format.js";
 import { saveLastScan } from "../scanner/cache.js";
 import { ensureGitignore } from "../scanner/gitignore.js";
 import { scan } from "../scanner/index.js";
 import type { Issue, ScanResult } from "../scanner/types.js";
-
-function plural(count: number, singular: string, pluralForm?: string): string {
-  if (count === 1) {
-    return singular;
-  }
-  return pluralForm ?? `${singular}s`;
-}
 
 function printIssueTable(issues: Issue[], includeDetail: boolean): void {
   const table = new Table({
@@ -48,29 +44,17 @@ function printIssueTable(issues: Issue[], includeDetail: boolean): void {
 }
 
 function printReport(result: ScanResult): void {
-  const { critical, warnings, healthyCount } = result;
+  printScanHeader(result);
 
-  console.log();
-  console.log(chalk.bold("DEVDOCTOR"));
-  console.log();
-  console.log(
-    `🔴 ${critical.length} critical ${plural(critical.length, "issue")}`,
-  );
-  console.log(`🟠 ${warnings.length} ${plural(warnings.length, "warning")}`);
-  console.log(
-    `🟢 ${healthyCount} healthy ${plural(healthyCount, "check")}`,
-  );
-  console.log();
-
-  if (critical.length > 0) {
+  if (result.critical.length > 0) {
     console.log(chalk.red.bold("CRITICAL"));
-    printIssueTable(critical, false);
+    printIssueTable(result.critical, false);
     console.log();
   }
 
-  if (warnings.length > 0) {
+  if (result.warnings.length > 0) {
     console.log(chalk.yellow.bold("WARNINGS"));
-    printIssueTable(warnings, true);
+    printIssueTable(result.warnings, true);
     console.log();
   }
 
@@ -84,11 +68,20 @@ export async function runScan(
 ): Promise<void> {
   const projectRoot =
     typeof args.projectRoot === "string" ? args.projectRoot : process.cwd();
+  const verbose = Boolean(args.verbose);
+
+  try {
+    await fs.access(path.join(projectRoot, "package.json"));
+  } catch {
+    throw new UserFacingError(
+      "No package.json found in this directory. Run devdoctor from your project root.",
+    );
+  }
 
   const spinner = ora("Scanning project...").start();
 
   try {
-    const result = await scan(projectRoot);
+    const result = await scan(projectRoot, { verbose });
     spinner.clear();
     spinner.stop();
     printReport(result);

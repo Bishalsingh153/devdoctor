@@ -1,8 +1,14 @@
+import path from "node:path";
 import { simpleGit } from "simple-git";
 
 export async function isGitRepo(cwd: string = process.cwd()): Promise<boolean> {
   try {
-    return await simpleGit(cwd).checkIsRepo();
+    const git = simpleGit(cwd);
+    if (!(await git.checkIsRepo())) {
+      return false;
+    }
+    const toplevel = (await git.revparse(["--show-toplevel"])).trim();
+    return path.resolve(toplevel) === path.resolve(cwd);
   } catch {
     return false;
   }

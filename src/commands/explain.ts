@@ -1,4 +1,5 @@
 import ora from "ora";
+import { ScanCacheCorruptError } from "../lib/errors.js";
 import { loadLastScan } from "../scanner/cache.js";
 import type { Issue } from "../scanner/types.js";
 import { explainIssue } from "../lib/llm.js";
@@ -15,7 +16,15 @@ function findIssue(issues: Issue[], id: number): Issue | undefined {
 
 export async function runExplain(args: { issueId: string }): Promise<void> {
   const projectRoot = process.cwd();
-  const result = await loadLastScan(projectRoot);
+  let result;
+  try {
+    result = await loadLastScan(projectRoot);
+  } catch (error) {
+    if (error instanceof ScanCacheCorruptError) {
+      fail(error.message);
+    }
+    throw error;
+  }
 
   if (!result) {
     fail("No scan cache found. Run `devdoctor scan` first.");

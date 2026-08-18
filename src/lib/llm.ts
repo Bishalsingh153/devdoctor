@@ -13,6 +13,9 @@ Return a JSON array with one entry per file that needs changing. Each entry must
 {"file": "<path relative to project root>", "newContent": "<full new file content>", "summary": "<one sentence>"}
 Use full new file content, not a patch format.
 Never use the npm placeholder test script that contains "Error: no test specified".
+Never propose a placeholder, stub, or fake fix that merely silences the check without solving the underlying problem. For a missing test script specifically: if the project has no test framework installed, propose adding a minimal one (prefer vitest for TS projects) as a devDependency AND write one real, meaningful test file that actually exercises existing code, plus a real 'test' script that runs it. Do not just add a script that echoes a message.
+Never satisfy a check by obfuscating, renaming, splitting, or otherwise disguising the pattern being detected, without addressing the underlying problem. For example: do not break up a flagged string (like 'TODO') via concatenation, string interpolation, or encoding tricks just to dodge a regex — that hides the issue instead of resolving it. For TODO comments specifically: either actually implement what the TODO describes, or if that's out of scope, replace it with a proper tracked comment explaining the current limitation and why (not simply removing or disguising the word 'TODO').
+Only change file contents. Never instruct the tool to run shell commands (npm update, git rm, etc.) as if they will be executed automatically. For a committed .env file: add the filename to .gitignore only — do not rewrite secret files; remind the user in the summary to run \`git rm --cached <file>\` themselves. For outdated dependencies: only edit package.json if a conservative version bump is clearly safe; do not assume lockfile or install steps will run.
 Respond with ONLY a raw JSON array, no markdown code fences, no explanation text before or after.`;
 
 export interface ProposedFix {
@@ -73,27 +76,25 @@ async function complete(
   client: OpenAI,
   messages: OpenAI.Chat.ChatCompletionMessageParam[],
   maxTokens: number,
-): Promise<string> {
+): Promise<{ content: string; finishReason: string | null | undefined }> {
   const response = await client.chat.completions.create({
     model: MODEL,
     messages,
     max_tokens: maxTokens,
   });
 
-  const content = response.choices[0]?.message?.content?.trim();
-  if (!content) {
-    throw new LlmRequestError(
-      "Groq returned an empty response. Try again in a bit.",
-    );
-  }
-  return content;
+  const choice = response.choices[0];
+  return {
+    content: choice?.message?.content?.trim() ?? "",
+    finishReason: choice?.finish_reason,
+  };
 }
 
 export async function explainIssue(issue: Issue): Promise<string> {
   const client = createClient();
 
   try {
-    return await complete(
+    const { content } = await complete(
       client,
       [
         { role: "system", content: EXPLAIN_SYSTEM_PROMPT },
@@ -101,12 +102,28 @@ export async function explainIssue(issue: Issue): Promise<string> {
       ],
       500,
     );
+    if (!content) {
+      throw new LlmRequestError(
+        "Groq returned an empty response. Try again in a bit.",
+      );
+    }
+    return content;
   } catch (error) {
     if (error instanceof LlmRequestError) {
       throw error;
     }
     throw new LlmRequestError(llmErrorMessage(error));
   }
+}
+
+function extractJsonArray(raw: string): string {
+  const stripped = stripJsonFences(raw);
+  const start = stripped.indexOf("[");
+  const end = stripped.lastIndexOf("]");
+  if (start === -1 || end === -1 || end <= start) {
+    return stripped;
+  }
+  return stripped.slice(start, end + 1);
 }
 
 function stripJsonFences(raw: string): string {
@@ -141,7 +158,7 @@ export async function proposeFix(
   let raw = "";
 
   try {
-    raw = await complete(
+    const completion = await complete(
       client,
       [
         { role: "system", content: FIX_SYSTEM_PROMPT },
@@ -150,8 +167,21 @@ export async function proposeFix(
           content: JSON.stringify({ issue, files: fileContents }),
         },
       ],
-      4096,
+      4000,
     );
+
+    if (completion.finishReason === "length") {
+      throw new LlmRequestError(
+        "Response was cut off — the file may be too large for a single-file fix. Try a smaller target file.",
+      );
+    }
+
+    raw = completion.content;
+    if (!raw) {
+      throw new LlmRequestError(
+        "Groq returned an empty response. Try again in a bit.",
+      );
+    }
   } catch (error) {
     if (error instanceof LlmRequestError) {
       throw error;
@@ -159,14 +189,15 @@ export async function proposeFix(
     throw new LlmRequestError(llmErrorMessage(error));
   }
 
-  const stripped = stripJsonFences(raw);
+  const stripped = extractJsonArray(raw);
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripped);
-  } catch {
+  } catch (error) {
+    const detail = error instanceof Error ? ` (${error.message})` : "";
     throw new LlmRequestError(
-      `Failed to parse fix JSON. Raw response:\n${raw}`,
+      `Failed to parse fix JSON${detail}. Raw response:\n${raw}`,
     );
   }
 

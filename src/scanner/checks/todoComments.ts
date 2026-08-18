@@ -1,25 +1,25 @@
-import fs from "node:fs/promises";
 import type { Issue } from "../types.js";
-import { listSourceFiles } from "../sourceFiles.js";
-
-const MARKER = "TO" + "DO";
-const PATTERN = new RegExp(`\\b${MARKER}\\b`, "g");
+import { listSourceFiles, readTextFile, toRelative } from "../sourceFiles.js";
+import {
+  TODO_ISSUE_TITLE,
+  countTodoComments,
+  isTodoMetaFile,
+} from "../todoPattern.js";
 
 export async function run(projectRoot: string): Promise<Issue[]> {
   const files = await listSourceFiles(projectRoot);
   let count = 0;
 
   for (const file of files) {
-    let content: string;
-    try {
-      content = await fs.readFile(file, "utf8");
-    } catch {
+    if (isTodoMetaFile(toRelative(projectRoot, file))) {
       continue;
     }
-    const matches = content.match(PATTERN);
-    if (matches) {
-      count += matches.length;
+
+    const content = await readTextFile(file);
+    if (content === null) {
+      continue;
     }
+    count += countTodoComments(content);
   }
 
   if (count === 0) {
@@ -29,9 +29,9 @@ export async function run(projectRoot: string): Promise<Issue[]> {
   return [
     {
       id: 0,
-      title: `${MARKER} comments found`,
+      title: TODO_ISSUE_TITLE,
       severity: "warning",
-      detail: `${count} ${MARKER} comment${count === 1 ? "" : "s"}`,
+      detail: `${count} TODO comment${count === 1 ? "" : "s"}`,
     },
   ];
 }
