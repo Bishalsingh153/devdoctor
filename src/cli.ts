@@ -1,5 +1,6 @@
 import { Command, CommanderError } from "commander";
 import { config as loadEnv } from "dotenv";
+import { runBenchmark } from "./commands/benchmark.js";
 import { runExplain } from "./commands/explain.js";
 import { runFix } from "./commands/fix.js";
 import { runScan } from "./commands/scan.js";
@@ -39,6 +40,21 @@ program
   .argument("<issueId>", "Issue ID from the last scan (e.g. 1)")
   .action(async (issueId: string) => {
     await runExplain({ issueId });
+  });
+
+program
+  .command("benchmark")
+  .summary("Measure token/time cost of proposing fixes (read-only)")
+  .description(
+    "Measure how many tokens/time it costs an AI to propose fixes for current issues (read-only, does not modify files)",
+  )
+  .option("--limit <n>", "Cap how many issues to benchmark")
+  .option("--history", "Print past benchmark runs")
+  .action(async (options: { limit?: string; history?: boolean }) => {
+    await runBenchmark({
+      limit: options.limit,
+      history: options.history,
+    });
   });
 
 program

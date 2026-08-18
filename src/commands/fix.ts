@@ -159,7 +159,8 @@ async function fixIssue(projectRoot: string, issue: Issue): Promise<number> {
 
   let proposals: ProposedFix[];
   try {
-    proposals = await proposeFix(issue, originals);
+    const { fixes } = await proposeFix(issue, originals);
+    proposals = fixes;
     spinner.stop();
   } catch (error) {
     const message =

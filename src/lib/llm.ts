@@ -4,6 +4,13 @@ import type { Issue } from "../scanner/types.js";
 const MODEL = "openai/gpt-oss-120b";
 const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 
+/** Groq list prices for openai/gpt-oss-120b (USD per 1M tokens). Not a live quote. */
+export const GROQ_PRICING = {
+  model: MODEL,
+  inputUsdPerMillion: 0.15,
+  outputUsdPerMillion: 0.6,
+} as const;
+
 const EXPLAIN_SYSTEM_PROMPT =
   "You are a senior engineer explaining a code health issue to a developer in plain, direct language. Be concrete about WHY it matters and what could go wrong if ignored. Keep it under 150 words. No fluff, no restating the issue title.";
 
@@ -22,6 +29,25 @@ export interface ProposedFix {
   file: string;
   newContent: string;
   summary: string;
+}
+
+export interface LlmUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface ProposeFixResult {
+  fixes: ProposedFix[];
+  usage: LlmUsage | null;
+  elapsedMs: number;
+}
+
+export function estimateCostUsd(usage: Pick<LlmUsage, "promptTokens" | "completionTokens">): number {
+  return (
+    (usage.promptTokens / 1_000_000) * GROQ_PRICING.inputUsdPerMillion +
+    (usage.completionTokens / 1_000_000) * GROQ_PRICING.outputUsdPerMillion
+  );
 }
 
 export class LlmRequestError extends Error {
@@ -72,21 +98,43 @@ export function llmErrorMessage(error: unknown): string {
   return "Groq could not complete this request right now. Try again in a bit.";
 }
 
+function toUsage(
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined,
+): LlmUsage | null {
+  if (!usage) {
+    return null;
+  }
+  return {
+    promptTokens: usage.prompt_tokens ?? 0,
+    completionTokens: usage.completion_tokens ?? 0,
+    totalTokens: usage.total_tokens ?? 0,
+  };
+}
+
 async function complete(
   client: OpenAI,
   messages: OpenAI.Chat.ChatCompletionMessageParam[],
   maxTokens: number,
-): Promise<{ content: string; finishReason: string | null | undefined }> {
+): Promise<{
+  content: string;
+  finishReason: string | null | undefined;
+  usage: LlmUsage | null;
+  elapsedMs: number;
+}> {
+  const started = performance.now();
   const response = await client.chat.completions.create({
     model: MODEL,
     messages,
     max_tokens: maxTokens,
   });
+  const elapsedMs = Math.round(performance.now() - started);
 
   const choice = response.choices[0];
   return {
     content: choice?.message?.content?.trim() ?? "",
     finishReason: choice?.finish_reason,
+    usage: toUsage(response.usage),
+    elapsedMs,
   };
 }
 
@@ -153,9 +201,11 @@ function isProposedFix(value: unknown): value is ProposedFix {
 export async function proposeFix(
   issue: Issue,
   fileContents: Record<string, string>,
-): Promise<ProposedFix[]> {
+): Promise<ProposeFixResult> {
   const client = createClient();
   let raw = "";
+  let usage: LlmUsage | null = null;
+  let elapsedMs = 0;
 
   try {
     const completion = await complete(
@@ -169,6 +219,8 @@ export async function proposeFix(
       ],
       4000,
     );
+    usage = completion.usage;
+    elapsedMs = completion.elapsedMs;
 
     if (completion.finishReason === "length") {
       throw new LlmRequestError(
@@ -207,5 +259,5 @@ export async function proposeFix(
     );
   }
 
-  return parsed;
+  return { fixes: parsed, usage, elapsedMs };
 }

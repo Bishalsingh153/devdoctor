@@ -4,7 +4,7 @@ CLI for scanning, explaining, and fixing developer environment issues.
 
 The npm package is **`@bishalsingh/devdoctor`**. After it is installed, the command on your PATH is still **`devdoctor`** (from the package `bin` field). `npx` must use the scoped package name; a global install does not.
 
-`devdoctor scan` runs checks against the current project and writes the last result to `.devdoctor/last-scan.json`. Use `explain` and `fix` on issue IDs from that scan.
+`devdoctor scan` runs checks against the current project and writes the last result to `.devdoctor/last-scan.json`. Use `explain` and `fix` on issue IDs from that scan. `benchmark [options]` measures token/time/estimated cost of proposing those fixes (read-only).
 
 ## Install
 
@@ -103,6 +103,16 @@ npx @bishalsingh/devdoctor fix --interactive
 npx @bishalsingh/devdoctor fix -i
 npx @bishalsingh/devdoctor fix --help
 ```
+
+Benchmark (needs `GROQ_API_KEY`). Measures how many tokens, how much time, and estimated cost it takes an AI to propose fixes for the project's current issues. Read-only: it never writes files. The idea is to track whether a codebase gets more or less "AI-friendly" (cheaper/faster to fix) over time as code, specs, and conventions improve.
+
+```bash
+npx @bishalsingh/devdoctor benchmark
+npx @bishalsingh/devdoctor benchmark --limit 5
+npx @bishalsingh/devdoctor benchmark --history
+```
+
+Estimated cost uses Groq's published list pricing for the current model and is labeled as an estimate, not a live quote. Each run is appended to `.devdoctor/benchmark-history.json`; `--history` shows those trends over time.
 
 `--verbose` on the root command or on `scan` prints full error details (including per-check failures).
 
