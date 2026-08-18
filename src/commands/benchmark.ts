@@ -152,6 +152,41 @@ function parseLimit(raw: unknown): number | undefined {
   return Math.floor(value);
 }
 
+function requireGroqApiKey(): void {
+  if (!process.env.GROQ_API_KEY) {
+    fail(
+      "GROQ_API_KEY not set. Export it or add it to a .env file in your project root.",
+    );
+  }
+}
+
+function shortError(error: unknown): string {
+  let message = error instanceof Error ? error.message : String(error);
+  const rawAt = message.search(/\nRaw response:/i);
+  if (rawAt !== -1) {
+    message = message.slice(0, rawAt);
+  }
+  message = message.replace(/\s+/g, " ").trim();
+  const sentence = message.match(/^(.+?[.!?])(?:\s|$)/);
+  if (sentence?.[1] && sentence[1].length >= 20) {
+    message = sentence[1];
+  }
+  if (message.length > 180) {
+    return `${message.slice(0, 177)}...`;
+  }
+  return message || "Unknown error";
+}
+
+function isMissingApiKeyError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("GROQ_API_KEY not set");
+}
+
+interface FailedIssue {
+  id: number;
+  title: string;
+  error: string;
+}
+
 export async function runBenchmark(args: {
   limit?: unknown;
   history?: boolean;
@@ -183,6 +218,8 @@ export async function runBenchmark(args: {
     return;
   }
 
+  requireGroqApiKey();
+
   const limit = parseLimit(args.limit);
   const selected = limit === undefined ? issues : issues.slice(0, limit);
 
@@ -197,12 +234,16 @@ export async function runBenchmark(args: {
   let completionTokens = 0;
   let totalTokens = 0;
   let totalElapsedMs = 0;
-  let failed = 0;
+  let succeeded = 0;
+  const failures: FailedIssue[] = [];
 
   const spinner = ora().start();
 
   for (let index = 0; index < selected.length; index += 1) {
     const issue = selected[index];
+    if (!issue) {
+      continue;
+    }
     spinner.text = `Benchmarking issue ${index + 1}/${selected.length}...`;
     try {
       const files = await filesForIssue(projectRoot, issue);
@@ -211,31 +252,51 @@ export async function runBenchmark(args: {
       completionTokens += usage?.completionTokens ?? 0;
       totalTokens += usage?.totalTokens ?? 0;
       totalElapsedMs += elapsedMs;
-    } catch {
-      failed += 1;
+      succeeded += 1;
+    } catch (error) {
+      spinner.stop();
+      if (isMissingApiKeyError(error)) {
+        fail(
+          "GROQ_API_KEY not set. Export it or add it to a .env file in your project root.",
+        );
+      }
+      failures.push({
+        id: issue.id,
+        title: issue.title,
+        error: shortError(error),
+      });
+      spinner.start();
     }
   }
 
   spinner.stop();
 
-  const n = selected.length;
-  const avgTokens = n === 0 ? 0 : totalTokens / n;
-  const avgElapsedMs = n === 0 ? 0 : totalElapsedMs / n;
+  const attempted = selected.length;
+
+  if (succeeded === 0) {
+    console.log();
+    console.log(chalk.bold("DEVDOCTOR BENCHMARK"));
+    console.log(
+      `Benchmark could not complete: 0 of ${attempted} issues succeeded`,
+    );
+    printFailedIssues(failures);
+    return;
+  }
+
+  const avgTokens = totalTokens / succeeded;
+  const avgElapsedMs = totalElapsedMs / succeeded;
   const estimatedCost = estimateCostUsd({ promptTokens, completionTokens });
-  const costPerIssue = n === 0 ? 0 : estimatedCost / n;
-  const scale = 1000 / n;
+  const costPerIssue = estimatedCost / succeeded;
+  const scale = 1000 / succeeded;
 
   console.log();
   console.log(chalk.bold("DEVDOCTOR BENCHMARK"));
-  console.log(`Benchmarked ${n} of ${issues.length} current issues`);
-  if (failed > 0) {
-    console.log(
-      `${failed} issue${failed === 1 ? "" : "s"} failed (counted as 0 tokens; run continued)`,
-    );
-  }
+  console.log(
+    `Benchmarked ${attempted} of ${issues.length} current issues (${succeeded} succeeded, ${failures.length} failed)`,
+  );
   console.log();
   console.log(
-    `Tokens:     ${formatCount(totalTokens)} total (${formatCount(avgTokens)} avg/issue)`,
+    `Tokens:     ${formatCount(totalTokens)} total across ${succeeded} succeeded issue${succeeded === 1 ? "" : "s"} (${formatCount(avgTokens)} avg/issue)`,
   );
   console.log(
     `Time:       ${formatDuration(totalElapsedMs)} total (${formatDuration(avgElapsedMs)} avg/issue)`,
@@ -247,6 +308,7 @@ export async function runBenchmark(args: {
   console.log(
     `Extrapolated for 1000 issues: ~${formatCount(avgTokens * 1000)} tokens, ~${formatUsd(estimatedCost * scale)}, ${formatDuration(avgElapsedMs * 1000)}`,
   );
+  printFailedIssues(failures);
   console.log();
   console.log(
     `Estimate uses Groq list prices for ${GROQ_PRICING.model} of $${GROQ_PRICING.inputUsdPerMillion}/1M input and $${GROQ_PRICING.outputUsdPerMillion.toFixed(2)}/1M output. Not a live quote; rates can change.`,
@@ -255,10 +317,22 @@ export async function runBenchmark(args: {
 
   await appendHistory(projectRoot, {
     timestamp: new Date().toISOString(),
-    issuesBenchmarked: n,
+    issuesBenchmarked: succeeded,
     totalTokens,
     avgTokensPerIssue: avgTokens,
     totalElapsedMs,
     estimatedCost,
   });
+}
+
+function printFailedIssues(failures: FailedIssue[]): void {
+  if (failures.length === 0) {
+    return;
+  }
+
+  console.log();
+  console.log(`Failed issues (${failures.length}):`);
+  for (const failure of failures) {
+    console.log(`  ${failure.id}. ${failure.title} — ${failure.error}`);
+  }
 }
